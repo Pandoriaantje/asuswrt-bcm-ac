@@ -1,9 +1,13 @@
 #!/usr/bin/env sh
-
-#
-# Hexonet_Login="username!roleId"
-#
-# Hexonet_Password="rolePassword"
+# shellcheck disable=SC2034
+dns_hexonet_info='Hexonet.com
+Site: Hexonet.com
+Docs: github.com/acmesh-official/acme.sh/wiki/dnsapi2#dns_hexonet
+Options:
+ Hexonet_Login Login. E.g. "username!roleId"
+ Hexonet_Password Role Password
+Issues: github.com/acmesh-official/acme.sh/issues/2389
+'
 
 Hexonet_Api="https://coreapi.1api.net/api/call.cgi"
 
@@ -42,7 +46,7 @@ dns_hexonet_add() {
   _debug _domain "$_domain"
 
   _debug "Getting txt records"
-  _hexonet_rest "&command=QueryDNSZoneRRList&dnszone=${h}.&RRTYPE=TXT"
+  _hexonet_rest "command=QueryDNSZoneRRList&dnszone=${h}.&RRTYPE=TXT"
 
   if ! _contains "$response" "CODE=200"; then
     _err "Error"
@@ -88,7 +92,7 @@ dns_hexonet_rm() {
   _debug _domain "$_domain"
 
   _debug "Getting txt records"
-  _hexonet_rest "&command=QueryDNSZoneRRList&dnszone=${h}.&RRTYPE=TXT&RR=${txtvalue}"
+  _hexonet_rest "command=QueryDNSZoneRRList&dnszone=${h}.&RRTYPE=TXT&RR=${_sub_domain}%20IN%20TXT%20\"${txtvalue}\""
 
   if ! _contains "$response" "CODE=200"; then
     _err "Error"
@@ -100,7 +104,7 @@ dns_hexonet_rm() {
   if [ "$count" = "0" ]; then
     _info "Don't need to remove."
   else
-    if ! _hexonet_rest "&command=UpdateDNSZone&dnszone=${_domain}.&delrr0='${_sub_domain}%20IN%20TXT%20\"${txtvalue}\""; then
+    if ! _hexonet_rest "command=UpdateDNSZone&dnszone=${_domain}.&delrr0=${_sub_domain}%20IN%20TXT%20\"${txtvalue}\""; then
       _err "Delete record error."
       return 1
     fi
@@ -119,19 +123,19 @@ _get_root() {
   i=1
   p=1
   while true; do
-    h=$(printf "%s" "$domain" | cut -d . -f $i-100)
+    h=$(printf "%s" "$domain" | cut -d . -f "$i"-100)
     _debug h "$h"
     if [ -z "$h" ]; then
       #not valid
       return 1
     fi
 
-    if ! _hexonet_rest "&command=QueryDNSZoneRRList&dnszone=${h}."; then
+    if ! _hexonet_rest "command=QueryDNSZoneRRList&dnszone=${h}."; then
       return 1
     fi
 
     if _contains "$response" "CODE=200"; then
-      _sub_domain=$(printf "%s" "$domain" | cut -d . -f 1-$p)
+      _sub_domain=$(printf "%s" "$domain" | cut -d . -f 1-"$p")
       _domain=$h
       return 0
     fi

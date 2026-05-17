@@ -1,10 +1,14 @@
 #!/usr/bin/env sh
+# shellcheck disable=SC2034
+dns_inwx_info='INWX.de
+Site: INWX.de
+Docs: github.com/acmesh-official/acme.sh/wiki/dnsapi#dns_inwx
+Options:
+ INWX_User Username
+ INWX_Password Password
+ INWX_Shared_Secret 2 Factor Authentication Shared Secret (optional requires oathtool)
+'
 
-#
-#INWX_User="username"
-#
-#INWX_Password="password"
-#
 # Dependencies:
 # -------------
 # - oathtool (When using 2 Factor Authentication)
@@ -34,6 +38,10 @@ dns_inwx_add() {
   _saveaccountconf_mutable INWX_Password "$INWX_Password"
   _saveaccountconf_mutable INWX_Shared_Secret "$INWX_Shared_Secret"
 
+  if ! _inwx_login; then
+    return 1
+  fi
+
   _debug "First detect the root zone"
   if ! _get_root "$fulldomain"; then
     _err "invalid domain"
@@ -55,6 +63,7 @@ dns_inwx_rm() {
 
   INWX_User="${INWX_User:-$(_readaccountconf_mutable INWX_User)}"
   INWX_Password="${INWX_Password:-$(_readaccountconf_mutable INWX_Password)}"
+  INWX_Shared_Secret="${INWX_Shared_Secret:-$(_readaccountconf_mutable INWX_Shared_Secret)}"
   if [ -z "$INWX_User" ] || [ -z "$INWX_Password" ]; then
     INWX_User=""
     INWX_Password=""
@@ -63,9 +72,9 @@ dns_inwx_rm() {
     return 1
   fi
 
-  #save the api key and email to the account conf file.
-  _saveaccountconf_mutable INWX_User "$INWX_User"
-  _saveaccountconf_mutable INWX_Password "$INWX_Password"
+  if ! _inwx_login; then
+    return 1
+  fi
 
   _debug "First detect the root zone"
   if ! _get_root "$fulldomain"; then
@@ -102,11 +111,17 @@ dns_inwx_rm() {
         <string>%s</string>
        </value>
       </member>
+      <member>
+       <name>content</name>
+       <value>
+        <string>%s</string>
+       </value>
+      </member>
      </struct>
     </value>
    </param>
   </params>
-  </methodCall>' "$_domain" "$_sub_domain")
+  </methodCall>' "$_domain" "$_sub_domain" "$txtvalue")
   response="$(_post "$xml_content" "$INWX_Api" "" "POST")"
 
   if ! _contains "$response" "Command completed successfully"; then
@@ -117,7 +132,7 @@ dns_inwx_rm() {
   if ! printf "%s" "$response" | grep "count" >/dev/null; then
     _info "Do not need to delete record"
   else
-    _record_id=$(printf '%s' "$response" | _egrep_o '.*(<member><name>record){1}(.*)([0-9]+){1}' | _egrep_o '<name>id<\/name><value><int>[0-9]+' | _egrep_o '[0-9]+')
+    _record_id=$(printf '%s' "$response" | _egrep_o '.*(<member><name>record){1}(.*)([0-9]+){1}' | _egrep_o '<name>id<\/name><value><string>[0-9]+' | _egrep_o '[0-9]+')
     _info "Deleting record"
     _inwx_delete_record "$_record_id"
   fi
@@ -126,7 +141,52 @@ dns_inwx_rm() {
 
 ####################  Private functions below ##################################
 
+_inwx_check_cookie() {
+  INWX_Cookie="${INWX_Cookie:-$(_readaccountconf_mutable INWX_Cookie)}"
+  if [ -z "$INWX_Cookie" ]; then
+    _debug "No cached cookie found"
+    return 1
+  fi
+  _H1="$INWX_Cookie"
+  export _H1
+
+  xml_content=$(printf '<?xml version="1.0" encoding="UTF-8"?>
+  <methodCall>
+  <methodName>account.info</methodName>
+  </methodCall>')
+
+  response="$(_post "$xml_content" "$INWX_Api" "" "POST")"
+
+  if _contains "$response" "<member><name>code</name><value><int>1000</int></value></member>"; then
+    _debug "Cached cookie still valid"
+    return 0
+  fi
+
+  _debug "Cached cookie no longer valid"
+  _H1=""
+  export _H1
+  INWX_Cookie=""
+  _saveaccountconf_mutable INWX_Cookie "$INWX_Cookie"
+  return 1
+}
+
+_htmlEscape() {
+  _s="$1"
+  _s=$(echo "$_s" | sed "s/&/&amp;/g")
+  _s=$(echo "$_s" | sed "s/</\&lt;/g")
+  _s=$(echo "$_s" | sed "s/>/\&gt;/g")
+  _s=$(echo "$_s" | sed 's/"/\&quot;/g')
+  printf -- %s "$_s"
+}
+
 _inwx_login() {
+
+  if _inwx_check_cookie; then
+    _debug "Already logged in"
+    return 0
+  fi
+
+  XML_PASS=$(_htmlEscape "$INWX_Password")
 
   xml_content=$(printf '<?xml version="1.0" encoding="UTF-8"?>
   <methodCall>
@@ -151,17 +211,25 @@ _inwx_login() {
     </value>
    </param>
   </params>
-  </methodCall>' $INWX_User $INWX_Password)
+  </methodCall>' "$INWX_User" "$XML_PASS")
 
   response="$(_post "$xml_content" "$INWX_Api" "" "POST")"
-  _H1=$(printf "Cookie: %s" "$(grep "domrobot=" "$HTTP_HEADER" | grep "^Set-Cookie:" | _tail_n 1 | _egrep_o 'domrobot=[^;]*;' | tr -d ';')")
+
+  INWX_Cookie=$(printf "Cookie: %s" "$(grep "domrobot=" "$HTTP_HEADER" | grep -i "^Set-Cookie:" | _tail_n 1 | _egrep_o 'domrobot=[^;]*;' | tr -d ';')")
+  _H1=$INWX_Cookie
   export _H1
+  export INWX_Cookie
+  _saveaccountconf_mutable INWX_Cookie "$INWX_Cookie"
+
+  if ! _contains "$response" "<member><name>code</name><value><int>1000</int></value></member>"; then
+    _err "INWX API: Authentication error (username/password correct?)"
+    return 1
+  fi
 
   #https://github.com/inwx/php-client/blob/master/INWX/Domrobot.php#L71
-  if _contains "$response" "<member><name>code</name><value><int>1000</int></value></member>" \
-    && _contains "$response" "<member><name>tfa</name><value><string>GOOGLE-AUTH</string></value></member>"; then
+  if _contains "$response" "<member><name>tfa</name><value><string>GOOGLE-AUTH</string></value></member>"; then
     if [ -z "$INWX_Shared_Secret" ]; then
-      _err "Mobile TAN detected."
+      _err "INWX API: Mobile TAN detected."
       _err "Please define a shared secret."
       return 1
     fi
@@ -194,6 +262,11 @@ _inwx_login() {
     </methodCall>' "$tan")
 
     response="$(_post "$xml_content" "$INWX_Api" "" "POST")"
+
+    if ! _contains "$response" "<member><name>code</name><value><int>1000</int></value></member>"; then
+      _err "INWX API: Mobile TAN not correct."
+      return 1
+    fi
   fi
 
 }
@@ -206,16 +279,28 @@ _get_root() {
   i=2
   p=1
 
-  _inwx_login
-
   xml_content='<?xml version="1.0" encoding="UTF-8"?>
   <methodCall>
   <methodName>nameserver.list</methodName>
+  <params>
+   <param>
+    <value>
+     <struct>
+      <member>
+       <name>pagelimit</name>
+       <value>
+        <int>9999</int>
+       </value>
+      </member>
+     </struct>
+    </value>
+   </param>
+  </params>
   </methodCall>'
 
   response="$(_post "$xml_content" "$INWX_Api" "" "POST")"
   while true; do
-    h=$(printf "%s" "$domain" | cut -d . -f $i-100)
+    h=$(printf "%s" "$domain" | cut -d . -f "$i"-100)
     _debug h "$h"
     if [ -z "$h" ]; then
       #not valid
@@ -223,7 +308,7 @@ _get_root() {
     fi
 
     if _contains "$response" "$h"; then
-      _sub_domain=$(printf "%s" "$domain" | cut -d . -f 1-$p)
+      _sub_domain=$(printf "%s" "$domain" | cut -d . -f 1-"$p")
       _domain="$h"
       return 0
     fi
@@ -246,7 +331,7 @@ _inwx_delete_record() {
       <member>
        <name>id</name>
        <value>
-        <int>%s</int>
+        <string>%s</string>
        </value>
       </member>
      </struct>
@@ -284,7 +369,7 @@ _inwx_update_record() {
       <member>
        <name>id</name>
        <value>
-        <int>%s</int>
+        <string>%s</string>
        </value>
       </member>
      </struct>

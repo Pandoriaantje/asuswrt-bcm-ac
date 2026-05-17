@@ -1,15 +1,15 @@
 #!/usr/bin/env sh
-
-# This is the OpenProvider API wrapper for acme.sh
-#
-# Author: Sylvia van Os
-# Report Bugs here: https://github.com/Neilpang/acme.sh/issues/2104
-#
-#     export OPENPROVIDER_USER="username"
-#     export OPENPROVIDER_PASSWORDHASH="hashed_password"
-#
-# Usage:
-#     acme.sh --issue --dns dns_openprovider -d example.com
+# shellcheck disable=SC2034
+dns_openprovider_info='OpenProvider.eu
+Site: OpenProvider.eu
+Domains: OpenProvider.com
+Docs: github.com/acmesh-official/acme.sh/wiki/dnsapi#dns_openprovider
+Options:
+ OPENPROVIDER_USER Username
+ OPENPROVIDER_PASSWORDHASH Password hash
+Issues: github.com/acmesh-official/acme.sh/issues/2104
+Author: Sylvia van Os
+'
 
 OPENPROVIDER_API="https://api.openprovider.eu/"
 #OPENPROVIDER_API="https://api.cte.openprovider.eu/" # Test API
@@ -59,12 +59,13 @@ dns_openprovider_add() {
         break
       fi
 
-      items="$(echo "$items" | sed "s|${item}||")"
+      tmpitem="$(echo "$item" | sed 's/\*/\\*/g')"
+      items="$(echo "$items" | sed "s|${tmpitem}||")"
 
       results_retrieved="$(_math "$results_retrieved" + 1)"
       new_item="$(echo "$item" | sed -n 's/.*<item>.*\(<name>\(.*\)\.'"$_domain_name"'\.'"$_domain_extension"'<\/name>.*\(<type>.*<\/type>\).*\(<value>.*<\/value>\).*\(<prio>.*<\/prio>\).*\(<ttl>.*<\/ttl>\)\).*<\/item>.*/<item><name>\2<\/name>\3\4\5\6<\/item>/p')"
       if [ -z "$new_item" ]; then
-        # Base record
+        # Domain apex
         new_item="$(echo "$item" | sed -n 's/.*<item>.*\(<name>\(.*\)'"$_domain_name"'\.'"$_domain_extension"'<\/name>.*\(<type>.*<\/type>\).*\(<value>.*<\/value>\).*\(<prio>.*<\/prio>\).*\(<ttl>.*<\/ttl>\)\).*<\/item>.*/<item><name>\2<\/name>\3\4\5\6<\/item>/p')"
       fi
 
@@ -86,7 +87,7 @@ dns_openprovider_add() {
 
   _debug "Creating acme record"
   acme_record="$(echo "$fulldomain" | sed -e "s/.$_domain_name.$_domain_extension$//")"
-  _openprovider_request "$(printf '<modifyZoneDnsRequest><domain><name>%s</name><extension>%s</extension></domain><type>master</type><records><array>%s<item><name>%s</name><type>TXT</type><value>%s</value><ttl>86400</ttl></item></array></records></modifyZoneDnsRequest>' "$_domain_name" "$_domain_extension" "$existing_items" "$acme_record" "$txtvalue")"
+  _openprovider_request "$(printf '<modifyZoneDnsRequest><domain><name>%s</name><extension>%s</extension></domain><type>master</type><records><array>%s<item><name>%s</name><type>TXT</type><value>%s</value><ttl>600</ttl></item></array></records></modifyZoneDnsRequest>' "$_domain_name" "$_domain_extension" "$existing_items" "$acme_record" "$txtvalue")"
 
   return 0
 }
@@ -136,7 +137,8 @@ dns_openprovider_rm() {
         break
       fi
 
-      items="$(echo "$items" | sed "s|${item}||")"
+      tmpitem="$(echo "$item" | sed 's/\*/\\*/g')"
+      items="$(echo "$items" | sed "s|${tmpitem}||")"
 
       results_retrieved="$(_math "$results_retrieved" + 1)"
       if ! echo "$item" | grep -v "$fulldomain"; then
@@ -147,7 +149,7 @@ dns_openprovider_rm() {
       new_item="$(echo "$item" | sed -n 's/.*<item>.*\(<name>\(.*\)\.'"$_domain_name"'\.'"$_domain_extension"'<\/name>.*\(<type>.*<\/type>\).*\(<value>.*<\/value>\).*\(<prio>.*<\/prio>\).*\(<ttl>.*<\/ttl>\)\).*<\/item>.*/<item><name>\2<\/name>\3\4\5\6<\/item>/p')"
 
       if [ -z "$new_item" ]; then
-        # Base record
+        # domain apex
         new_item="$(echo "$item" | sed -n 's/.*<item>.*\(<name>\(.*\)'"$_domain_name"'\.'"$_domain_extension"'<\/name>.*\(<type>.*<\/type>\).*\(<value>.*<\/value>\).*\(<prio>.*<\/prio>\).*\(<ttl>.*<\/ttl>\)\).*<\/item>.*/<item><name>\2<\/name>\3\4\5\6<\/item>/p')"
       fi
 
@@ -185,7 +187,7 @@ _get_root() {
 
   results_retrieved=0
   while true; do
-    h=$(echo "$domain" | cut -d . -f $i-100)
+    h=$(echo "$domain" | cut -d . -f "$i"-100)
     _debug h "$h"
     if [ -z "$h" ]; then
       #not valid
@@ -205,7 +207,8 @@ _get_root() {
         break
       fi
 
-      items="$(echo "$items" | sed "s|${item}||")"
+      tmpitem="$(echo "$item" | sed 's/\*/\\*/g')"
+      items="$(echo "$items" | sed "s|${tmpitem}||")"
 
       results_retrieved="$(_math "$results_retrieved" + 1)"
 
